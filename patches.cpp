@@ -6,9 +6,9 @@
 #include <random>
 #include <set>
 #include <algorithm>
+#include <map>
 
 using namespace std;
-
 
 typedef genie::ResourceUsage<int16_t, int16_t, int16_t> ResourceCost;
 typedef genie::ResourceUsage<int16_t, int16_t, int8_t> ResearchResourceCost;
@@ -38,6 +38,14 @@ ResourceCost toResourceCost(const ResearchResourceCost &researchResourceCost);
 vector<ResearchResourceCost> toResearchResourceCosts(const vector<ResourceCost> &resourceCosts);
 
 vector<ResourceCost> toResourceCosts(const vector<ResearchResourceCost> &researchResourceCosts);
+
+void multiplyEffect(genie::DatFile *df, uint16_t effectId, uint16_t civ_id, int times);
+
+void multiplyEffectCommand(genie::DatFile *df, genie::EffectCommand& command, uint16_t effectId, uint16_t civ_id, int times);
+
+void multiplyTcAnnexCommand(genie::DatFile *df, genie::EffectCommand& command, int times);
+
+void addDummyAnnexBuilding(genie::DatFile *df, const vector<int16_t> annexUnitIds);
 
 
 void configureCommunityGamesMod(genie::DatFile *df) {
@@ -763,3 +771,226 @@ void copyResourceCostAt(int unitId, int index, vector<ResourceCost> &target, con
     target.at(index).Amount = source.Amount;
     target.at(index).Flag = source.Flag;
 }
+
+void debugPrintEffect(genie::DatFile *df, uint16_t effectId) {
+    const genie::Effect &effect = df->Effects.at(effectId);
+    cout << effectId << " - " << effect.Name << endl;
+}
+
+void multiplyCivilizationBonuses(genie::DatFile *df, int times) {
+    std::vector<uint16_t> effectIds;
+    for (auto it = df->Civs.begin(); it != df->Civs.end(); ++it) {
+        auto civ_id = it - df->Civs.begin();
+        if (civ_id == 0) // skip gaia
+            continue;
+
+        effectIds.push_back(it->TechTreeID);
+        effectIds.push_back(it->TeamBonusID);
+
+        cout << "From civ " << it - df->Civs.begin() << " " << it->Name << " " << it->Name2 << ":" << endl;
+        multiplyEffect(df, it->TechTreeID, civ_id, times);
+        multiplyEffect(df, it->TeamBonusID, civ_id, times);
+        cout << endl;
+    }
+
+    for (auto it = df->Techs.begin(); it != df->Techs.end(); ++it) {
+        if (it->Civ == 0 || it->Civ == -1 || it->EffectID == -1)
+            continue;
+        if (find(effectIds.begin(), effectIds.end(), it->EffectID) != effectIds.end())
+            continue;
+
+        effectIds.push_back(it->EffectID);
+
+        cout << "From tech " << it->Name << " " << it->Name2 << "(" << df->Civs[it->Civ].Name << ")" << ":" << endl;
+        multiplyEffect(df, it->EffectID, it->Civ, times);
+        cout << endl;
+    }
+}
+
+int capEffectMultiplication(uint16_t effectId, int times) {
+    // Cap some effects multiplication so it doesnt break the gameplay too much
+    // especially for higher multiplication values
+    static const map<uint16_t, int> CAPPED_EFFECTS {
+        // prevent huns from starting with less wood since the "no houses" bonus cant be multiplied
+        {EFFECT_ID_HUNS_100_WOOD, 1},
+        // avoid persian tc and dock hitpoints from going over hitpoints limit
+        {EFFECT_ID_PERSIAN_TC_HITPOINTS, 4},
+        {EFFECT_ID_PERSIAN_DOCK_HITPOINTS, 5}
+    };
+
+    auto it = CAPPED_EFFECTS.find(effectId);
+    if (it != CAPPED_EFFECTS.end()) {
+        return it->second;
+    }
+    return times;
+}
+
+void multiplyEffect(genie::DatFile *df, uint16_t effectId, uint16_t civ_id, int times) {
+    times = capEffectMultiplication(effectId, times);
+
+    auto& effect = df->Effects.at(effectId);
+    cout << effectId << " - " << effect.Name << endl;
+    for (auto& command: effect.EffectCommands) {
+        multiplyEffectCommand(df, command, effectId, civ_id, times);
+    }
+}
+
+void multiplyEffectCommand(genie::DatFile *df, genie::EffectCommand& command, uint16_t effectId, uint16_t civ_id, int times) {
+    string commandTypeName = "UNK";
+    if (command.Type == COMMAND_RESOURCE_MODIFIER) {
+        commandTypeName = "Resource Modifier (Set/+/-)";
+    }
+    else if (command.Type == COMMAND_UPGRADE_UNIT) {
+        const string fromUnit = df->Civs[0].Units[command.A].Name;
+        const string toUnit = df->Civs[0].Units[command.B].Name;
+        commandTypeName = "Upgrade Unit " + fromUnit + "(" + to_string(command.A) + ") -> " + toUnit + "(" + to_string(command.B) + ")";
+    }
+    else if (command.Type == COMMAND_ATTRIBUTE_MODIFIER) {
+        commandTypeName = "Attribute Modifier (+/-)";
+    }
+    else if (command.Type == COMMAND_ATTRIBUTE_MULTIPLIER) {
+        commandTypeName = "Attribute Modifier (Mult)";
+    }
+    else if (command.Type == COMMAND_TEAM_ATTRIBUTE_MODIFIER) {
+        commandTypeName = "Team Attribute Modifier (Set)";
+    }
+    else if (command.Type == COMMAND_TECH_COST_MODIFIER) {
+        string techName = command.A > 0 ? df->Techs[command.A].Name : "-1";
+        commandTypeName = "Tech Cost Modifier (Set/+/-) " + techName;
+    }
+    else if (command.Type == COMMAND_DISABLE_TECH) {
+        string techName = command.D > 0 ? df->Techs[command.D].Name : "-1";
+        commandTypeName = "Disable tech " + techName;
+    }
+    else if (command.Type == COMMAND_TECH_TIME_MODIFIER) {
+        string techName = command.A > 0 ? df->Techs[command.A].Name : "-1";
+        commandTypeName = "Tech Time Modifier (Set/+/-) " + techName;
+    }
+
+    float oldD = command.D;
+    switch (command.Type) {
+        case COMMAND_RESOURCE_MODIFIER:
+            if (command.B == 0 && command.D < 7e13) { // Set
+                auto baseValue = df->Civs[civ_id].Resources.at(command.A);
+                if (command.A == RESOURCE_RESEARCH_COST_MODIFIER) {
+                    baseValue = 1.0;
+                }
+                cout << "Calculating new resource modifier (set): baseValue=" << baseValue << " command.D=" << command.D << " times=" << times << endl;
+                command.D = (command.D - baseValue) * times + baseValue;
+            } else if (command.B == 1) { // + or -
+                command.D *= times;
+            }
+            break;
+        case COMMAND_UPGRADE_UNIT:
+            if (command.A == ID_EMPTY_TC_ANNEX) {
+                multiplyTcAnnexCommand(df, command, times);
+            }
+            break;
+        case COMMAND_ATTRIBUTE_MODIFIER:
+            if (command.C == 8 || command.C == 9) { // Armor/Atack
+                int v = command.D;
+                int armor_type = v / 256;
+                int amount = v % 256;
+                command.D = float(armor_type * 256 + min(amount * times, 255));
+            }
+            else {
+                command.D *= times;
+            }
+            break;
+        case COMMAND_ATTRIBUTE_MULTIPLIER:
+            command.D = pow(command.D, times);
+            // make sure units wont have too many hitpoints
+            if (command.A != -1) {
+                if (command.C == 0) {
+                    const int unitHitPoints = df->Civs[civ_id].Units[command.A].HitPoints;
+                    if (unitHitPoints * command.D >= (1 << 16)) {
+                        cout << "[WARNING] unit with too many hitpoints: " << df->Civs[civ_id].Units[command.A].Name << " (" << df->Civs[civ_id].Name << ")" << endl;
+                    }
+                }
+            }
+
+            break;
+        case COMMAND_TEAM_ATTRIBUTE_MODIFIER:
+            if (command.A != -1) {
+                float delta = command.D - df->Civs[civ_id].Units[command.A].ResourceStorages[0].Amount;
+                command.D = delta * times;
+            }
+            break;
+        case COMMAND_TECH_COST_MODIFIER: // Tech Cost Modifier (Set/+/-)
+            if (command.C == 0) { // Set
+                // TODO: do something clever
+            } else if (command.C == 1) { // + or -
+                command.D *= times;
+            }
+            break;
+    }
+    if (command.D == oldD) {
+        cout << "[UNCHANGED] ";
+    }
+    cout << "command type: " << int(command.Type) << " - " << commandTypeName << " - " << "(A=" << command.A << " B=" << command.B << " C=" << command.C << " D=" << oldD << ") => " << command.D << endl;
+}
+
+void multiplyTcAnnexCommand(genie::DatFile *df, genie::EffectCommand& command, int times) {
+    int total_leafs = 0;
+
+    // store unit ids for every created tc annex node
+    vector<int16_t> annexUnits;
+    annexUnits.push_back(command.B);
+    
+    int leafCount = 1;
+
+    // find the subtree that will produce less than `times` leaves with the maximum degree (4)
+    while (leafCount * 4 < times) {
+        addDummyAnnexBuilding(
+            df,
+            vector<int16_t>(4, annexUnits.back())
+        );
+        annexUnits.push_back(df->Civs[0].Units.size() - 1);
+        leafCount *= 4;
+    }
+
+    // find how many of each annex unit types are needed to reach `times` replicas
+    // add them in a tree using a stack
+    vector<int16_t> stack;
+    for (int i = annexUnits.size() - 1; i >= 0; --i) {
+        stack.insert(stack.end(), times / leafCount, annexUnits[i]);
+        times %= leafCount;
+        leafCount /= 4; // descend one level
+        while (stack.size() >= 4) {
+            addDummyAnnexBuilding(df, stack);
+            stack.erase(stack.begin(), stack.begin()+4);
+            stack.push_back(df->Civs[0].Units.size() - 1);
+        }
+    }
+    if (stack.size() != 1) {
+        addDummyAnnexBuilding(df, stack);
+        stack.clear();
+        stack.push_back(df->Civs[0].Units.size() - 1);
+    }
+    command.B = stack.at(0);
+}
+
+void addDummyAnnexBuilding(genie::DatFile *df, const vector<int16_t> annexUnitIds) {
+    genie::Unit dummyAnnexUnit(df->Civs[0].Units[annexUnitIds[0]]);
+    dummyAnnexUnit.Building.Annexes.clear();
+
+    const std::vector<std::pair<int, int>> misplacements {
+        {0, 0},
+        {-1, 0},
+        {-1, 1},
+        {0, 1}
+    };
+
+    // generate the annex instances with the given unit ids
+    for (int i = 0; i < 4; ++i) {
+        auto newAnnex = genie::unit::BuildingAnnex();
+        newAnnex.Misplacement = misplacements[i];
+        newAnnex.UnitID = i < annexUnitIds.size() ? annexUnitIds.at(i) : -1;
+        dummyAnnexUnit.Building.Annexes.push_back(newAnnex);
+    }
+    for (auto& civ : df->Civs) {
+        civ.Units.push_back(dummyAnnexUnit);
+        civ.UnitPointers.push_back(1);
+    }
+}
+

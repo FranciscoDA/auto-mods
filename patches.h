@@ -19,5 +19,6 @@ void makeTreesContain200Wood(genie::DatFile *df);
 void jumbleCosts(genie::DatFile *df);
 void jumbleUnitCosts(genie::DatFile *df);
 void jumbleTechCosts(genie::DatFile *df);
+void multiplyCivilizationBonuses(genie::DatFile *df, int times);
 
 #endif //CREATE_DATA_MOD_PATCHES_H

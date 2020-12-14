@@ -56,6 +56,8 @@ Where <mod-identifier> is one of the following, or multiple of the following joi
     x3
     x9
     x256
+    x3-civ-bonus
+    x9-civ-bonus
 ```
 
 For example, in order to patch the current dat file with the Flying Dutchman modifications, one might execute

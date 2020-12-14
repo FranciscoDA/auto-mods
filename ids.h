@@ -211,4 +211,22 @@ static const int ACTION_LOOT = 122;
 static const int CLASS_CIVILIAN = 4;
 static const int CLASS_BUILDING = 3;
 
+
+static const int ID_EMPTY_TC_ANNEX = 890;
+static const int RESOURCE_RESEARCH_COST_MODIFIER = 85;
+
+static const int EFFECT_ID_HUNS_100_WOOD = 214;
+static const int EFFECT_ID_PERSIAN_TC_HITPOINTS = 340;
+static const int EFFECT_ID_PERSIAN_DOCK_HITPOINTS = 347;
+
+static const int COMMAND_RESOURCE_MODIFIER = 1;
+static const int COMMAND_UPGRADE_UNIT = 3;
+static const int COMMAND_ATTRIBUTE_MODIFIER = 4;
+static const int COMMAND_ATTRIBUTE_MULTIPLIER = 5;
+static const int COMMAND_TEAM_ATTRIBUTE_MODIFIER = 10;
+static const int COMMAND_TECH_COST_MODIFIER = 101;
+static const int COMMAND_DISABLE_TECH = 102;
+static const int COMMAND_TECH_TIME_MODIFIER = 103;
+
+
 #endif //CREATE_DATA_MOD_IDS_H
