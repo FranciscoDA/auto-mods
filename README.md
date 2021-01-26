@@ -28,7 +28,7 @@ Just install stuff until it stops complaining I guess, sorry.
 ```sh
 git clone --recurse-submodules https://github.com/SiegeEngineers/auto-mods.git
 cd auto-mods
-./patchGenieutils.sh
+patch -d genieutils <genieutils.patch
 mkdir build
 cd build
 cmake ..
